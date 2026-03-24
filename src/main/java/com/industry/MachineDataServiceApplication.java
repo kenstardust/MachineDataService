@@ -1,4 +1,4 @@
-package com.industry.MachineDataService;
+package com.industry;
 
 import org.mybatis.spring.annotation.MapperScan;
 import org.springframework.boot.SpringApplication;
