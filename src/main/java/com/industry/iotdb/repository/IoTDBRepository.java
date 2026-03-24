@@ -1,6 +1,7 @@
 package com.industry.iotdb.repository;
 
-import com.industry.iotdb.exception.IoTDBOperationException;
+import com.industry.iotdb.exception.IoTDBExecutionException;
+import com.industry.iotdb.exception.IoTDBUnavailableException;
 import com.industry.iotdb.model.dto.IoTDBField;
 import com.industry.iotdb.model.dto.IoTDBRecord;
 import com.industry.iotdb.model.request.DeleteRequest;
@@ -43,8 +44,10 @@ public class IoTDBRepository {
                     measurementValues(record.getFields())
             );
             return 1;
-        } catch (IoTDBConnectionException | StatementExecutionException ex) {
-            throw new IoTDBOperationException("Failed to insert IoTDB record", ex);
+        } catch (IoTDBConnectionException ex) {
+            throw new IoTDBUnavailableException("Failed to insert IoTDB record", ex);
+        } catch (StatementExecutionException ex) {
+            throw new IoTDBExecutionException("Failed to insert IoTDB record", ex);
         }
     }
 
@@ -85,8 +88,10 @@ public class IoTDBRepository {
             } finally {
                 sessionPool.closeResultSet(wrapper);
             }
-        } catch (IoTDBConnectionException | StatementExecutionException ex) {
-            throw new IoTDBOperationException("Failed to query IoTDB data", ex);
+        } catch (IoTDBConnectionException ex) {
+            throw new IoTDBUnavailableException("Failed to query IoTDB data", ex);
+        } catch (StatementExecutionException ex) {
+            throw new IoTDBExecutionException("Failed to query IoTDB data", ex);
         }
     }
 
@@ -95,8 +100,10 @@ public class IoTDBRepository {
             List<String> paths = buildDeletePaths(request);
             sessionPool.deleteData(paths, request.getStartTime(), request.getEndTime());
             return paths.size();
-        } catch (IoTDBConnectionException | StatementExecutionException ex) {
-            throw new IoTDBOperationException("Failed to delete IoTDB data", ex);
+        } catch (IoTDBConnectionException ex) {
+            throw new IoTDBUnavailableException("Failed to delete IoTDB data", ex);
+        } catch (StatementExecutionException ex) {
+            throw new IoTDBExecutionException("Failed to delete IoTDB data", ex);
         }
     }
 
@@ -113,8 +120,10 @@ public class IoTDBRepository {
                     chunk.stream().map(record -> measurementValues(record.getFields())).toList()
             );
             return chunk.size();
-        } catch (IoTDBConnectionException | StatementExecutionException ex) {
-            throw new IoTDBOperationException("Failed to batch insert IoTDB records", ex);
+        } catch (IoTDBConnectionException ex) {
+            throw new IoTDBUnavailableException("Failed to batch insert IoTDB records", ex);
+        } catch (StatementExecutionException ex) {
+            throw new IoTDBExecutionException("Failed to batch insert IoTDB records", ex);
         }
     }
 

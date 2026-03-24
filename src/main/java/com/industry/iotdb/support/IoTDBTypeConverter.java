@@ -1,6 +1,6 @@
 package com.industry.iotdb.support;
 
-import com.industry.iotdb.exception.IoTDBOperationException;
+import com.industry.iotdb.exception.IoTDBBadRequestException;
 import org.apache.tsfile.enums.TSDataType;
 
 public final class IoTDBTypeConverter {
@@ -12,7 +12,7 @@ public final class IoTDBTypeConverter {
         try {
             return TSDataType.valueOf(dataType.toUpperCase());
         } catch (Exception ex) {
-            throw new IoTDBOperationException("Unsupported IoTDB data type: " + dataType, ex);
+            throw new IoTDBBadRequestException("Unsupported IoTDB data type: " + dataType, ex);
         }
     }
 
@@ -22,14 +22,18 @@ public final class IoTDBTypeConverter {
         }
         TSDataType type = toType(dataType);
         String text = String.valueOf(value);
-        return switch (type) {
-            case BOOLEAN -> Boolean.parseBoolean(text);
-            case INT32, DATE -> Integer.parseInt(text);
-            case INT64, TIMESTAMP -> Long.parseLong(text);
-            case FLOAT -> Float.parseFloat(text);
-            case DOUBLE -> Double.parseDouble(text);
-            case TEXT, STRING, BLOB -> text;
-            default -> throw new IoTDBOperationException("Unsupported IoTDB data type: " + type);
-        };
+        try {
+            return switch (type) {
+                case BOOLEAN -> Boolean.parseBoolean(text);
+                case INT32, DATE -> Integer.parseInt(text);
+                case INT64, TIMESTAMP -> Long.parseLong(text);
+                case FLOAT -> Float.parseFloat(text);
+                case DOUBLE -> Double.parseDouble(text);
+                case TEXT, STRING, BLOB -> text;
+                default -> throw new IoTDBBadRequestException("Unsupported IoTDB data type: " + type);
+            };
+        } catch (NumberFormatException ex) {
+            throw new IoTDBBadRequestException("Invalid value for IoTDB data type: " + dataType, ex);
+        }
     }
 }
