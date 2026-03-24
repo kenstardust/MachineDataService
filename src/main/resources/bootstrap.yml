@@ -1,0 +1,12 @@
+spring:
+  application:
+    name: MachineData-Service
+  cloud:
+    nacos:
+      discovery:
+        server-addr: 10.1.40.171:8848
+        namespace: 648bf097-1fa4-47cb-a31f-696e1869fb38
+      config:
+        server-addr: 10.1.40.171:8848
+        namespace: 648bf097-1fa4-47cb-a31f-696e1869fb38
+        file-extension: yaml

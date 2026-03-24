@@ -1,0 +1,29 @@
+server:
+  port: 8054
+
+spring:
+  application:
+    name: MachineData-Service
+  datasource:
+    url: jdbc:mysql://127.0.0.1:3306/machine_data_service?useUnicode=true&characterEncoding=UTF-8&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true
+    username: root
+    password: kevin812
+    driver-class-name: com.mysql.cj.jdbc.Driver
+  data:
+    redis:
+      host: 10.1.40.17
+      port: 6379
+      database: 0
+      timeout: 5s
+  kafka:
+    bootstrap-servers: 10.1.40.171:9092
+    consumer:
+      group-id: MachineData-Service
+      auto-offset-reset: latest
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
+
+
