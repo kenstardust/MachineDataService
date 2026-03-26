@@ -8,15 +8,15 @@ spring:
     consumer:
       enable-auto-commit: false
 
-machine:
-  kafka:
-    consumer:
-      enabled: false
-      concurrency: 1
-      topics: []
-      idempotency:
-        enabled: true
-        key-prefix: "kafka:idempotent:"
-        processing-ttl-seconds: 600
-        done-ttl-hours: 72
+# machine:
+#   kafka:
+#     consumer:
+#       enabled: false
+#       concurrency: 1
+#       topics: []
+#       idempotency:
+#         enabled: true
+#         key-prefix: "kafka:idempotent:"
+#         processing-ttl-seconds: 600
+#         done-ttl-hours: 72
 
