@@ -14,7 +14,7 @@ import org.springframework.util.StringUtils;
 public class RedisConfig {
 
     @Bean(destroyMethod = "shutdown")
-    @ConditionalOnProperty(prefix = "machine.redis", name = "enabled", havingValue = "true", matchIfMissing = true)
+    @ConditionalOnProperty(prefix = "machine.redis", name = "enabled", havingValue = "true", matchIfMissing = false)
     public RedissonClient redissonClient(RedisProperties properties) {
         Config config = new Config();
         var singleServer = config.useSingleServer()

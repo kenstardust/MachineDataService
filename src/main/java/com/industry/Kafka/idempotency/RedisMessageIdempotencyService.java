@@ -2,12 +2,14 @@ package com.industry.Kafka.idempotency;
 
 import com.industry.Config.KafkaConsumerProperties;
 import com.industry.Redis.template.RedisCacheTemplate;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
 import java.time.Duration;
 
 @Service
+@ConditionalOnProperty(prefix = "machine.redis", name = "enabled", havingValue = "true", matchIfMissing = false)
 public class RedisMessageIdempotencyService implements MessageIdempotencyService {
 
     private final RedisCacheTemplate redisCacheTemplate;

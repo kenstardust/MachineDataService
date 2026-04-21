@@ -4,12 +4,14 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.redisson.api.RBucket;
 import org.redisson.api.RedissonClient;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Service;
 
 import java.io.IOException;
 import java.time.Duration;
 
 @Service("rediscache")
+@ConditionalOnProperty(prefix = "machine.redis", name = "enabled", havingValue = "true", matchIfMissing = false)
 public class RedissonRedisCacheTemplate implements RedisCacheTemplate {
 
     private final RedissonClient redissonClient;

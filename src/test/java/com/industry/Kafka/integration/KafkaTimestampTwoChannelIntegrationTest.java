@@ -21,18 +21,18 @@ import java.time.format.DateTimeFormatter;
 import java.util.List;
 import java.util.Map;
 import java.util.Properties;
-import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 
 @SpringBootTest(properties = {
         "spring.autoconfigure.exclude=org.springframework.boot.autoconfigure.jdbc.DataSourceAutoConfiguration",
         "spring.kafka.bootstrap-servers=10.1.40.171:9092",
-        "spring.kafka.consumer.group-id=MachineData-Service-real-read",
+        "spring.kafka.consumer.group-id=testMachineDataService",
         "spring.kafka.consumer.auto-offset-reset=earliest",
         "spring.kafka.consumer.key-deserializer=org.apache.kafka.common.serialization.StringDeserializer",
         "spring.kafka.consumer.value-deserializer=org.apache.kafka.common.serialization.StringDeserializer",
-        "machine.kafka.consumer.enabled=true",
+        "machine.kafka.consumer.enabled=false",
+        "machine.kafka.consumer.group-id=testMachineDataService",
         "machine.kafka.consumer.concurrency=1",
         "machine.kafka.consumer.topics[0]=test-topic",
         "machine.kafka.consumer.idempotency.enabled=true",
@@ -80,7 +80,7 @@ class KafkaTimestampTwoChannelIntegrationTest {
     private VerifiedCandidate readAndVerifyTwoChannels() throws InterruptedException {
         Properties properties = new Properties();
         properties.put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, "10.1.40.171:9092");
-        properties.put(ConsumerConfig.GROUP_ID_CONFIG, "inspector-time-" + UUID.randomUUID());
+        properties.put(ConsumerConfig.GROUP_ID_CONFIG, "testMachineDataService");
         properties.put(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "earliest");
         properties.put(ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, "false");
         properties.put(ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class.getName());

@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(./mvnw test *)",
+      "Bash(mvn test *)",
+      "Bash(curl -s -X POST http://10.1.40.171:8080/iotdb/query/single -H 'Content-Type: application/json' -d '{ *)",
+      "Bash(curl -s -X POST http://10.1.40.171:8080/iotdb/query/single -H 'Content-Type: application/json' -d '{\"device\": \"root.test.channel_01\", \"measurements\": [\"value\"], \"startTime\": 1776663680060, \"endTime\": 1776663680100, \"limit\": 10, \"offset\": 0}')",
+      "Bash(mvn *)"
+    ]
+  }
+}

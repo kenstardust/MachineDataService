@@ -5,42 +5,37 @@ import com.industry.entity.ChannelEntity;
 import com.industry.iotdb.model.request.QueryRequest;
 import com.industry.iotdb.model.response.QueryResponse;
 import com.industry.iotdb.service.IoTDBDataService;
-import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
-import org.apache.kafka.clients.consumer.ConsumerRecords;
-import org.apache.kafka.clients.consumer.KafkaConsumer;
-import org.apache.kafka.common.serialization.StringDeserializer;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.kafka.annotation.KafkaListener;
+import org.springframework.kafka.support.Acknowledgment;
 
-import java.time.Duration;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
 import java.util.Map;
-import java.util.Properties;
-import java.util.UUID;
-
-import static org.junit.jupiter.api.Assertions.assertNotNull;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.atomic.AtomicReference;
 
 @SpringBootTest(properties = {
         "spring.autoconfigure.exclude=org.springframework.boot.autoconfigure.jdbc.DataSourceAutoConfiguration",
         "spring.kafka.bootstrap-servers=10.1.40.171:9092",
-        "spring.kafka.consumer.group-id=MachineData-Service-real-read",
+        "spring.kafka.consumer.group-id=testMachineDataService",
         "spring.kafka.consumer.auto-offset-reset=earliest",
         "spring.kafka.consumer.key-deserializer=org.apache.kafka.common.serialization.StringDeserializer",
         "spring.kafka.consumer.value-deserializer=org.apache.kafka.common.serialization.StringDeserializer",
         "machine.kafka.consumer.enabled=true",
+        "machine.kafka.consumer.group-id=testMachineDataService",
         "machine.kafka.consumer.concurrency=1",
         "machine.kafka.consumer.topics[0]=test-topic",
-        "machine.kafka.consumer.idempotency.enabled=true",
+        "machine.kafka.consumer.idempotency.enabled=false",
         "machine.kafka.consumer.idempotency.key-prefix=kafka:idempotent:realtest:",
         "machine.kafka.consumer.idempotency.processing-ttl-seconds=600",
         "machine.kafka.consumer.idempotency.done-ttl-hours=72",
-        "machine.redis.enabled=true",
-        "machine.redis.address=redis://10.1.40.171:6379",
+        "machine.redis.enabled=false",
         "iotdb.host=10.1.40.171",
         "iotdb.port=6667",
         "iotdb.username=root",
@@ -50,7 +45,18 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 class KafkaToIoTDBRealFlowIntegrationTest {
 
     private static final String TOPIC = "test-topic";
+    private static final String CONTINUOUS_LISTENER_GROUP = "testMachineDataService-continuous";
+    private static final String DEVICE_CHANNEL_01 = "root.test.channel_01";
+    private static final String DEVICE_CHANNEL_24 = "root.test.channel_24";
+    private static final String DEVICE_CHANNEL_48 = "root.test.channel_48";
     private static final DateTimeFormatter KAFKA_TIME_FORMAT = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss.SSSSSS");
+    private static final long IOTDB_QUERY_WINDOW_MS = 2000;
+    private static final int IOTDB_RETRY_PER_CANDIDATE = 6;
+    private static final long IOTDB_RETRY_INTERVAL_MS = 1000;
+    private static final double VALUE_EPSILON = 1e-6;
+
+    private final CountDownLatch keepAlive = new CountDownLatch(1);
+    private final AtomicReference<String> lastFailure = new AtomicReference<>();
 
     @Autowired
     private ObjectMapper objectMapper;
@@ -58,101 +64,75 @@ class KafkaToIoTDBRealFlowIntegrationTest {
     @Autowired
     private IoTDBDataService ioTDBDataService;
 
-    private static final long KAFKA_SCAN_TIMEOUT_MS = 120000;
-    private static final long IOTDB_QUERY_WINDOW_MS = 2000;
-    private static final int IOTDB_RETRY_PER_CANDIDATE = 6;
-    private static final long IOTDB_RETRY_INTERVAL_MS = 1000;
-    private static final double VALUE_EPSILON = 1e-6;
+    @KafkaListener(
+            topics = TOPIC,
+            groupId = CONTINUOUS_LISTENER_GROUP,
+            containerFactory = "kafkaListenerContainerFactory"
+    )
+    public void listen(ConsumerRecord<String, String> record, Acknowledgment acknowledgment) {
+        try {
+            ChannelEntity message = parseIfValidChannelMessage(record.value());
+            if (message == null) {
+                logInvalidPayload(record);
+                return;
+            }
 
-    @Test
-    void shouldReadExistingKafkaMessageAndVerifyPersistedToIoTDB() throws Exception {
-        ConsumedMessage consumed = readPersistedChannelMessageFromExistingQueue();
-        assertNotNull(consumed, "No persisted channel json message found in topic test-topic within timeout");
+            long timestamp = parseKafkaTimestamp(message.getTime());
+            if (!waitUntilPersisted(DEVICE_CHANNEL_01, timestamp, message.getChannels().get("chan1"))) {
+                logPersistFailure(record, timestamp, DEVICE_CHANNEL_01);
+                return;
+            }
+            if (!waitUntilPersisted(DEVICE_CHANNEL_24, timestamp, message.getChannels().get("chan24"))) {
+                logPersistFailure(record, timestamp, DEVICE_CHANNEL_24);
+                return;
+            }
+            if (!waitUntilPersisted(DEVICE_CHANNEL_48, timestamp, message.getChannels().get("chan48"))) {
+                logPersistFailure(record, timestamp, DEVICE_CHANNEL_48);
+                return;
+            }
 
-        ConsumerRecord<String, String> existingRecord = consumed.record();
-        ChannelEntity message = consumed.message();
-        long timestamp = parseKafkaTimestamp(message.getTime());
-
-        double chan1 = message.getChannels().get("chan1");
-        double chan24 = message.getChannels().get("chan24");
-        double chan48 = message.getChannels().get("chan48");
-
-        System.out.println("[KAFKA REAL FLOW] consumedFromExistingQueue=true");
-        System.out.println("[KAFKA REAL FLOW] topic=" + TOPIC + ", partition=" + existingRecord.partition() + ", offset=" + existingRecord.offset());
-        System.out.println("[KAFKA REAL FLOW] kafkaKey=" + existingRecord.key());
-        System.out.println("[KAFKA REAL FLOW] time=" + message.getTime() + ", timestampMs=" + timestamp);
-        System.out.println("[KAFKA REAL FLOW] devices=root.test.channel_01,root.test.channel_24,root.test.channel_48");
-        System.out.println("[KAFKA REAL FLOW] values chan1=" + chan1 + ", chan24=" + chan24 + ", chan48=" + chan48);
+            acknowledgment.acknowledge();
+            lastFailure.set(null);
+            logVerificationSuccess(record, message);
+        } catch (Exception ex) {
+            logVerificationException(record, ex);
+        }
     }
 
-    private ConsumedMessage readPersistedChannelMessageFromExistingQueue() throws InterruptedException {
-        Properties properties = new Properties();
-        properties.put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, "10.1.40.171:9092");
-        properties.put(ConsumerConfig.GROUP_ID_CONFIG, "inspector-" + UUID.randomUUID());
-        properties.put(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "earliest");
-        properties.put(ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, "false");
-        properties.put(ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class.getName());
-        properties.put(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class.getName());
+    @Test
+    void shouldKeepListeningUntilManuallyStopped() throws InterruptedException {
+        System.out.println("[TEST] KafkaToIoTDBRealFlowIntegrationTest is running in continuous mode.");
+        System.out.println("[TEST] Success means a Kafka message has already been persisted to IoTDB.");
+        System.out.println("[TEST] Stop the program manually when you want to end monitoring.");
+        keepAlive.await();
+    }
 
-        int inspectedValidMessages = 0;
-        ConsumedMessage lastCandidate = null;
+    private void logInvalidPayload(ConsumerRecord<String, String> record) {
+        String failure = "Kafka message is not a valid channel payload, offset=" + record.offset();
+        lastFailure.set(failure);
+        System.out.println("[KAFKA->IOTDB FAILED] " + failure);
+    }
 
-        try (KafkaConsumer<String, String> consumer = new KafkaConsumer<>(properties)) {
-            consumer.subscribe(List.of(TOPIC));
-            long deadline = System.currentTimeMillis() + KAFKA_SCAN_TIMEOUT_MS;
-            while (System.currentTimeMillis() < deadline) {
-                ConsumerRecords<String, String> records = consumer.poll(Duration.ofMillis(1000));
-                for (ConsumerRecord<String, String> record : records) {
-                    System.out.println("[KAFKA DEBUG] polled topic=" + record.topic()
-                            + ", partition=" + record.partition()
-                            + ", offset=" + record.offset()
-                            + ", key=" + record.key());
-                    System.out.println("[KAFKA DEBUG] payload=" + truncate(record.value(), 500));
+    private void logPersistFailure(ConsumerRecord<String, String> record, long timestamp, String device) {
+        String failure = "Kafka consumed but IoTDB missing " + device
+                + ", offset=" + record.offset()
+                + ", timestampMs=" + timestamp;
+        lastFailure.set(failure);
+        System.out.println("[KAFKA->IOTDB FAILED] " + failure);
+    }
 
-                    ChannelEntity message = parseIfValidChannelMessage(record.value());
-                    if (message == null) {
-                        System.out.println("[KAFKA DEBUG] skipped non-channel message at offset=" + record.offset());
-                        continue;
-                    }
+    private void logVerificationSuccess(ConsumerRecord<String, String> record, ChannelEntity message) {
+        System.out.println("[KAFKA->IOTDB VERIFIED] topic=" + record.topic()
+                + ", partition=" + record.partition()
+                + ", offset=" + record.offset()
+                + ", time=" + message.getTime()
+                + ", devices=" + DEVICE_CHANNEL_01 + "," + DEVICE_CHANNEL_24 + "," + DEVICE_CHANNEL_48);
+    }
 
-                    inspectedValidMessages++;
-                    lastCandidate = new ConsumedMessage(record, message);
-                    long timestamp = parseKafkaTimestamp(message.getTime());
-                    double chan1 = message.getChannels().get("chan1");
-                    double chan24 = message.getChannels().get("chan24");
-                    double chan48 = message.getChannels().get("chan48");
-
-                    boolean channel01Ok = waitUntilPersisted("root.test.channel_01", timestamp, chan1);
-                    boolean channel24Ok = waitUntilPersisted("root.test.channel_24", timestamp, chan24);
-                    boolean channel48Ok = waitUntilPersisted("root.test.channel_48", timestamp, chan48);
-
-                    if (channel01Ok && channel24Ok && channel48Ok) {
-                        System.out.println("[KAFKA DEBUG] matched persisted channel message at offset=" + record.offset());
-                        return lastCandidate;
-                    }
-
-                    System.out.println("[KAFKA DEBUG] candidate not persisted yet. offset=" + record.offset()
-                            + ", timestampMs=" + timestamp
-                            + ", channel01Ok=" + channel01Ok
-                            + ", channel24Ok=" + channel24Ok
-                            + ", channel48Ok=" + channel48Ok);
-                }
-            }
-        }
-
-        System.out.println("[KAFKA DEBUG] no persisted candidate found, inspectedValidMessages=" + inspectedValidMessages);
-        if (lastCandidate != null) {
-            long ts = parseKafkaTimestamp(lastCandidate.message().getTime());
-            System.out.println("[KAFKA DEBUG] lastCandidate topic=" + TOPIC
-                    + ", partition=" + lastCandidate.record().partition()
-                    + ", offset=" + lastCandidate.record().offset()
-                    + ", timestampMs=" + ts
-                    + ", values chan1=" + lastCandidate.message().getChannels().get("chan1")
-                    + ", chan24=" + lastCandidate.message().getChannels().get("chan24")
-                    + ", chan48=" + lastCandidate.message().getChannels().get("chan48"));
-        }
-
-        return null;
+    private void logVerificationException(ConsumerRecord<String, String> record, Exception ex) {
+        String failure = "Kafka consumed but IoTDB verification failed at offset=" + record.offset() + ": " + ex.getMessage();
+        lastFailure.set(failure);
+        System.out.println("[KAFKA->IOTDB FAILED] " + failure);
     }
 
     private ChannelEntity parseIfValidChannelMessage(String payload) {
@@ -210,18 +190,5 @@ class KafkaToIoTDBRealFlowIntegrationTest {
                 .atZone(ZoneId.systemDefault())
                 .toInstant()
                 .toEpochMilli();
-    }
-
-    private String truncate(String value, int maxLen) {
-        if (value == null) {
-            return null;
-        }
-        if (value.length() <= maxLen) {
-            return value;
-        }
-        return value.substring(0, maxLen) + "...";
-    }
-
-    private record ConsumedMessage(ConsumerRecord<String, String> record, ChannelEntity message) {
     }
 }

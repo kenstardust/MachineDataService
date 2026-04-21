@@ -30,7 +30,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Properties;
 import java.util.Set;
-import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -38,12 +37,12 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 @SpringBootTest(properties = {
         "spring.autoconfigure.exclude=org.springframework.boot.autoconfigure.jdbc.DataSourceAutoConfiguration",
         "spring.kafka.bootstrap-servers=10.1.40.171:9092",
-        "spring.kafka.consumer.group-id=MachineData-Service-drain-${random.uuid}",
+        "spring.kafka.consumer.group-id=testMachineDataService",
         "spring.kafka.consumer.auto-offset-reset=earliest",
         "spring.kafka.consumer.key-deserializer=org.apache.kafka.common.serialization.StringDeserializer",
         "spring.kafka.consumer.value-deserializer=org.apache.kafka.common.serialization.StringDeserializer",
-        "machine.kafka.consumer.enabled=true",
-        "machine.kafka.consumer.group-id=MachineData-Service-drain-${random.uuid}",
+        "machine.kafka.consumer.enabled=false",
+        "machine.kafka.consumer.group-id=testMachineDataService",
         "machine.kafka.consumer.concurrency=1",
         "machine.kafka.consumer.topics[0]=test-topic",
         "machine.kafka.consumer.idempotency.enabled=true",
@@ -65,7 +64,7 @@ class KafkaBacklogDrainBenchmarkIntegrationTest {
     private static final long MAX_BENCHMARK_MS = 600000;
     private static final long CHECK_INTERVAL_MS = 1000;
     private static final int REQUIRED_CONSECUTIVE_DRAIN_CHECKS = 3;
-    private static final int SAMPLE_EVERY_N_MESSAGES = 200;
+    private static final int SAMPLE_EVERY_N_MESSAGES = 10;
     private static final long IOTDB_QUERY_WINDOW_MS = 2000;
     private static final int IOTDB_RETRY = 3;
     private static final double VALUE_EPSILON = 1e-6;
@@ -95,8 +94,9 @@ class KafkaBacklogDrainBenchmarkIntegrationTest {
 
         long startMillis = System.currentTimeMillis();
 
-        SamplingStats samplingStats = runSamplingChecks(TOPIC, committedOffsetsAtStart, endOffsets);
+        List<SampledMessage> sampledMessages = collectSampledMessages(TOPIC, committedOffsetsAtStart, endOffsets);
         DrainStats drainStats = waitUntilDrained(groupId, endOffsets, startMillis);
+        SamplingStats samplingStats = verifySamplesAfterDrain(sampledMessages);
 
         long elapsedMs = System.currentTimeMillis() - startMillis;
         long writtenCount = countDoneKeys(idempotencyPrefix);
@@ -123,7 +123,7 @@ class KafkaBacklogDrainBenchmarkIntegrationTest {
 
     private Map<TopicPartition, Long> readEndOffsets(String topic) {
         Properties properties = kafkaProperties();
-        properties.put(ConsumerConfig.GROUP_ID_CONFIG, "benchmark-endoffset-" + UUID.randomUUID());
+        properties.put(ConsumerConfig.GROUP_ID_CONFIG, "testMachineDataService");
         properties.put(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "earliest");
         try (KafkaConsumer<String, String> consumer = new KafkaConsumer<>(properties)) {
             consumer.subscribe(List.of(topic));
@@ -137,24 +137,23 @@ class KafkaBacklogDrainBenchmarkIntegrationTest {
         }
     }
 
-    private SamplingStats runSamplingChecks(String topic,
-                                            Map<TopicPartition, Long> committedOffsetsAtStart,
-                                            Map<TopicPartition, Long> endOffsets) throws InterruptedException {
+    private List<SampledMessage> collectSampledMessages(String topic,
+                                                        Map<TopicPartition, Long> committedOffsetsAtStart,
+                                                        Map<TopicPartition, Long> endOffsets) {
         Properties properties = kafkaProperties();
-        properties.put(ConsumerConfig.GROUP_ID_CONFIG, "benchmark-sampler-" + UUID.randomUUID());
+        properties.put(ConsumerConfig.GROUP_ID_CONFIG, "testMachineDataService");
         properties.put(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "earliest");
         properties.put(ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, "false");
 
         long consumedInWindow = 0;
-        long sampleAttempts = 0;
-        long samplePass = 0;
-        long sampleFail = 0;
+        long windowTarget = calculateBacklogCount(endOffsets, committedOffsetsAtStart);
+        List<SampledMessage> sampledMessages = new ArrayList<>();
 
         try (KafkaConsumer<String, String> consumer = new KafkaConsumer<>(properties)) {
             consumer.subscribe(List.of(topic));
             long deadline = System.currentTimeMillis() + MAX_BENCHMARK_MS;
 
-            while (System.currentTimeMillis() < deadline && consumedInWindow < calculateBacklogCount(endOffsets, committedOffsetsAtStart)) {
+            while (System.currentTimeMillis() < deadline && consumedInWindow < windowTarget) {
                 ConsumerRecords<String, String> records = consumer.poll(Duration.ofMillis(1000));
                 for (ConsumerRecord<String, String> record : records) {
                     TopicPartition tp = new TopicPartition(record.topic(), record.partition());
@@ -175,20 +174,33 @@ class KafkaBacklogDrainBenchmarkIntegrationTest {
                         continue;
                     }
 
-                    sampleAttempts++;
-                    long timestamp = parseKafkaTimestamp(message.getTime());
-                    double chan1 = message.getChannels().get("chan1");
-                    double chan24 = message.getChannels().get("chan24");
-
-                    boolean channel01Ok = waitUntilPersisted("root.test.channel_01", timestamp, chan1);
-                    boolean channel24Ok = waitUntilPersisted("root.test.channel_24", timestamp, chan24);
-
-                    if (channel01Ok && channel24Ok) {
-                        samplePass++;
-                    } else {
-                        sampleFail++;
-                    }
+                    sampledMessages.add(new SampledMessage(
+                            record.partition(),
+                            record.offset(),
+                            parseKafkaTimestamp(message.getTime()),
+                            message.getChannels().get("chan1"),
+                            message.getChannels().get("chan24")
+                    ));
                 }
+            }
+        }
+
+        return sampledMessages;
+    }
+
+    private SamplingStats verifySamplesAfterDrain(List<SampledMessage> sampledMessages) throws InterruptedException {
+        long sampleAttempts = sampledMessages.size();
+        long samplePass = 0;
+        long sampleFail = 0;
+
+        for (SampledMessage sample : sampledMessages) {
+            boolean channel01Ok = waitUntilPersisted("root.test.channel_01", sample.timestamp(), sample.chan1());
+            boolean channel24Ok = waitUntilPersisted("root.test.channel_24", sample.timestamp(), sample.chan24());
+
+            if (channel01Ok && channel24Ok) {
+                samplePass++;
+            } else {
+                sampleFail++;
             }
         }
 
@@ -329,6 +341,9 @@ class KafkaBacklogDrainBenchmarkIntegrationTest {
     }
 
     private record SamplingStats(long sampleAttempts, long samplePass, long sampleFail) {
+    }
+
+    private record SampledMessage(int partition, long offset, long timestamp, double chan1, double chan24) {
     }
 
     private record DrainStats(boolean drained, long finalLag) {
